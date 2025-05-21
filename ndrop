@@ -15,11 +15,6 @@ print_help() {
   echo "          classname is different from the name of the [COMMAND]"
   echo "          and ndrop has no hardcoded replacement."
   echo ""
-  echo "  -F, --focus"
-  echo "          Changes the default behaviour: focus the specified program's"
-  echo "          window and switch to its present workspace if necessary."
-  echo "          Do not hide it, if it's already on the current workspace."
-  echo ""
   echo "  -H, --help"
   echo "          Print this help message"
   echo ""
@@ -85,9 +80,6 @@ ndrop_flags() {
       shift
       CLASS_OVERRIDE="$1"
       ;;
-    -F | --focus)
-      FOCUS=true
-      ;;
     -H | --help)
       print_help
       exit
@@ -111,7 +103,6 @@ ndrop_flags() {
   done
 }
 
-FOCUS=false
 INSENSITIVE=false
 ONLINE=false
 VERBOSE=false
@@ -197,36 +188,26 @@ if [[ -n $CLASS_OVERRIDE ]]; then
 fi
 
 WINDOW_ID=$(niri msg --json windows | jq -r ".[] | select(.app_id==\"$CLASS\") | .id")
-
-### OVERRIDE ###
-FOCUS=true
+FOCUSED_WINDOW_ID="$(niri msg --json focused-window | jq -r ".id")"
+FOCUSED_WORKSPACE_ID="$(niri msg --json focused-window | jq -r ".workspace_id")"
+FOCUSED_WORKSPACE_IDX="$(niri msg --json workspaces | jq -r ".[]|select(.id==$FOCUSED_WORKSPACE_ID)|.idx")"
+PREVIOUS_WORKSPACE_IDX="$(niri msg --json workspaces | jq -r ".[]|select(.is_focused==false && .is_active==true)|.idx")"
 
 if [[ -n $(niri msg --json windows | jq -r ".[] | select(.app_id==\"$CLASS\" and .workspace_id!=\"$ACTIVE_WORKSPACE\")") ]]; then
-  if [[ $FOCUS == false ]]; then
-    # shellcheck disable=SC2140 # erroneous warning
-    niri msg action move-window-to-workspace --window-id "$WINDOW_ID" "$ACTIVE_WORKSPACE" || notify "ndrop: Error moving '$COMMANDLINE' to current workspace"
-    if $VERBOSE; then notify_low "ndrop: Matched class '$CLASS' on another workspace and moved it to current workspace"; fi
-  fi
-  niri msg action focus-window --id "$WINDOW_ID" || notify "ndrop: Error focusing '$COMMANDLINE' on current workspace"
-elif [[ -n $(niri msg --json windows | jq -r ".[] | select(.app_id==\"$CLASS\" and .workspace_id==\"$ACTIVE_WORKSPACE\")") ]]; then
-  if [[ $FOCUS == false ]]; then
-    # shellcheck disable=SC2086 # integers won't be split
-    niri msg action move-window-to-workspace --window-id "$WINDOW_ID" "ndrop" || notify "ndrop: Error moving '$COMMANDLINE' to workspace 'ndrop'"
-    niri msg action focus-workspace "$ACTIVE_WORKSPACE"
-    if $VERBOSE; then notify_low "ndrop: Matched class '$CLASS' on current workspace and moved it to workspace 'ndrop'"; fi
-    # else
-  elif [[ -n $(niri msg --json windows | jq -r ".[] | select(.app_id==\"$CLASS\" and .workspace_id!=\"ndrop\")") ]]; then
+  if [[ "$WINDOW_ID" -eq "$FOCUSED_WINDOW_ID" ]]; then
+    niri msg action focus-workspace $FOCUSED_WORKSPACE_IDX
+    niri msg action focus-window-previous
+  else
     niri msg action focus-window --id "$WINDOW_ID" || notify "ndrop: Error focusing '$COMMANDLINE' on current workspace"
+    niri msg action center-window
   fi
+elif [[ -n $(niri msg --json windows | jq -r ".[] | select(.app_id==\"$CLASS\" and .workspace_id==\"$ACTIVE_WORKSPACE\")") ]]; then
+  niri msg action focus-window --id "$WINDOW_ID" || notify "ndrop: Error focusing '$COMMANDLINE' on current workspace"
 else
   if $ONLINE; then wait_online; fi
-  # 'foot' always throws an error when its window is closed. Thus we disable the notification.
-  if [[ $COMMAND == "foot" ]]; then
-    # shellcheck disable=SC2086 # when quoting COMMANDLINE the execution of the command fails
-    $COMMANDLINE
-  else
-    # shellcheck disable=SC2086 # when quoting COMMANDLINE the execution of the command fails
-    $COMMANDLINE || notify "ndrop: Error executing given command" "$COMMANDLINE"
-  fi
+
+  # shellcheck disable=SC2086 # when quoting COMMANDLINE the execution of the command fails
+  $COMMANDLINE || notify "ndrop: Error executing given command" "$COMMANDLINE"
+
   if $VERBOSE; then notify_low "ndrop: No running program matches class '$CLASS'." "Currently active classes are '$(niri msg --json windows | jq -r '.[] | .app_id' | sort | tr '\n' ' ')'. Executed '$COMMANDLINE' in case it was not running already."; fi
 fi
